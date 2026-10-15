@@ -20,6 +20,7 @@ Before any feasibility verdict it asks for **staging credentials** and runs **ev
 | `src/configs/baseConfigs.json.sample` (`vendorClassIdMapping`) | vendor-integrations | Yes |
 | `tests/vendors/{vendorName}.*.test.ts` + fixtures | vendor-integrations | Yes |
 | `src/configs/vendorConfigs/{ClassName}.json` (staging values) | vendor-integrations | No: gitignored, stays local |
+| `config.php.sample`, `vendor_tables.php`, `sale/{key}_voucher` listing page (controller, model, language, tpl), `header.tpl`, `product_automation.tpl`; for Variant B (fixed SKU) also the product controller/model and both product form templates; `order_list.tpl` if there is a balance | karma | Yes |
 | `vendorBalance/vendors/{vendorName}Balance.js`, `vendorBalance.js`, `conf.json.sample` | karma_reports | Yes, only if the vendor has a balance endpoint |
 
 It never hand-edits `config.json`, which `npm run merge-configs` regenerates.
@@ -30,7 +31,7 @@ The handoff gives an ordered checklist covering:
 - deployment config: VI vendor config and mappings, OPMS `vendorIntegration.integratedVendors` (string ids), and the plumAuth webhook routing (`api.integratedVendors`, `rawPayload`);
 - the token, sync and polling schedulers;
 - DB rows and tables;
-- about 12 karma admin files;
+- the real `karma/config.php` define in every env before deploy, and the User Group permission;
 - a staging smoke test.
 
 Platform limits it flags up front:

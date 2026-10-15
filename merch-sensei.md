@@ -193,7 +193,8 @@ LOCAL / DEPLOYMENT CONFIG (gitignored — delivered via devx, never in a PR)
 • src/configs/vendorConfigs/{ClassName}.json
 • src/configs/baseConfigs.json mappings (per env)
 BALANCE (if endpoint exists): karma_reports vendors/{vendorName}Balance.js + vendorBalance.js + conf.json.sample
-CHECKLIST ONLY (other repos / DB) — see Handoff
+KARMA FILES (Phase 3C): config.php.sample, vendor_tables.php, sale/{key}_voucher controller/model/language/tpl, header.tpl, product_automation.tpl; fixedSku also catalog/product controller+model and both product form tpls; order_list.tpl if balance
+CHECKLIST ONLY (OPMS, plumAuth, real karma config.php, permissions, DB) — see Handoff
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Shall I proceed? (yes / no / clarify X)
 ```
@@ -293,6 +294,147 @@ Write the karma_reports balance fetcher, exactly as `/akatsuki-giftcards` Phase 
 - `conf.json.sample`: add a placeholder-only block. The real `conf.json` gets the staging values locally; it is never committed.
 - Report the exact `{key}`. The karma `order_list.tpl` `<td id>` and jQuery line must use the same key.
 
+### PHASE 3C — karma admin (always)
+
+You make the karma edits yourself. karma is PHP (OpenCart). Repo `karma`, app root `karma/` inside it. It has no tests, linter, CI or CLAUDE.md. Production PHP is unconfirmed: likely 5.x, since it uses `mysql_connect`, `each()` and `create_function()`.
+- Branch from `origin/dev`: `STO-<ticket>-<key>-dev`. Sibling `-uat`, `-stagingV1` and `-canvas` branches are each cut from their own env branch and get one PR each. Don't blindly cherry-pick: the env branches drift by hundreds of lines.
+- **Insert by content anchor, never by line number.** Re-read the reference vendor's files on the target branch first; anchors that exist on dev may be missing on uat.
+
+**Inputs**
+
+| Name | Example |
+|---|---|
+| `{CONST}` | the `{CONST}_VENDOR_ID` prefix |
+| `{ID}` | the vendor id for this env |
+| `{key}` | snake_case, used in routes, files, POST keys, tables |
+| `{Camel}` | `{key}` with the underscores removed and each segment capitalised, used in class and method names; the route `sale/{key}_voucher` maps to `ControllerSale{Camel}Voucher` |
+| `{Label}` | display name |
+| `{sync_table}` | the vendor-integrations table |
+
+**Pre-checks**
+- Run `SHOW COLUMNS FROM {sync_table}`. Every schema value and every listing column you write must exist there.
+- Run `git show origin/dev:karma/config.php.sample | grep -nE "[ ,]{ID}\)"`. It must return nothing: duplicate integer keys in PHP arrays silently overwrite each other.
+- Decide **variableSku** or **fixedSku**. FixedSku is one vendor SKU per denomination, stored in `{key}_product_to_denominations(product_id, sku, amount)`.
+
+**Edits — Variant A, every merch vendor** (reference: DPanda on dev; Printstop and Sharaf DG follow the same pattern)
+1. **`karma/config.php.sample`.** After `define('PRINTSTPMERCHANDISE_VENDOR_ID', …);`, add `define('{CONST}_VENDOR_ID', {ID});`. **Keep the semicolon**: some existing merch defines lack it.
+2. **`karma/model/schema/vendor_tables.php` `getVendorSchema()`.** After the `DPANDA_VENDOR_ID => array ( … ),` block, add:
+   ```php
+         {CONST}_VENDOR_ID => array (
+           "table" => "{sync_table}",
+           "columns" => array (
+             "productName" => "name", "productSku" => "sku", "brand" => "brand", "minPrice" => "", "maxPrice" => "",
+             "productDenominations" => "denominations", "productDescription" => "description", "category" => "categories",
+             "productTnC" => "terms_conditions", "currency_code" => "currency", "productHowToUse" => "how_to_use",
+             "priceType" => "", "is_variable" => "is_variable", 'productImage' => "image", "productDiscount" => ""
+           )
+         ),
+   ```
+   The sync table must have `brand`; the listing echoes it.
+3. **Listing page.** Four new files cloned from `dpanda_voucher` on dev, renamed:
+   - `karma/controller/sale/{key}_voucher.php` (`ControllerSale{Camel}Voucher`, `getVendorProducts(..., {CONST}_VENDOR_ID)`, `bulkDownloadProductData`)
+     - In the pagination URL, `{page}` is a literal OpenCart token. Don't substitute it.
+   - `karma/model/sale/{key}_voucher.php` (`get{Camel}Products($page)` + `bulkDownloadProductData()` on `{sync_table}`)
+     - Close the table backtick: `qc_voucher.php` once shipped a broken one.
+   - `karma/language/english/sale/{key}_voucher.php` (heading, plus the column labels for id, image, sku, name, brand, currency, last updated, countries, denominations, description, T&C and category)
+   - `karma/view/template/sale/{key}_products.tpl` (copy `dpanda_products.tpl` and change only the filter-JS route to `sale/{key}_voucher`)
+     - The `$this->template` file name must match.
+4. **`karma/view/template/catalog/product_automation.tpl` `getRoutes()`.** After `"<?php echo DPANDA_VENDOR_ID; ?>" : "sale/dpanda_voucher",`, add `  "<?php echo {CONST}_VENDOR_ID; ?>" : "sale/{key}_voucher",`.
+5. **`karma/view/template/common/header.tpl`, "Merchandise Vendors" menu.** After the `Dpanda Vendor` `<li>`, add:
+   `<li><a href="<?php echo $this->url->link('sale/{key}_voucher', 'token=' . $this->session->data['token'] , 'SSL'); ?>">{Label} Vendor</a></li>`.
+6. **`order_list.tpl`**, only if Phase 3B produced `{balance_key}`: add the same complete row and JS setter as the other balances. No merch vendor has one yet.
+
+There are no other merch screens to wire: `merchandise_vendor_order_details` and courier tracking have no per-vendor karma code, and `brand` is display-only. Auto-created merch products aren't set to "Delayed" delivery until ops assign the merchandise filter group; put that in the handoff.
+
+**Variant B (fixed SKU per denomination, the DPanda pattern).** Everything below is inert unless `{ID}` is in each env's real `FIXED_SKU_VENDORS`. On dev and stagingV1, DPanda's own define and `getFixedSkusTable` entry exist only on uat, so anchor on the nearest fixed vendor that exists on the target branch.
+
+**FixedSku only.** Every snippet below exists for DPanda (dev `90522e1f1` + `63d1a367c`); insert yours right after its counterpart.
+- **`config.php.sample` `FIXED_SKU_VENDORS`.** Append `, {ID}` right before the closing `"`: comma, one space, digits.
+  - The list is parsed with `explode(", ", …)`, so any other separator silently drops ids. dev already loses some this way.
+  - Don't "fix" existing entries.
+- **`vendor_tables.php` `getFixedSkusTable()`.** Add `{CONST}_VENDOR_ID => array( "table_name" => "{key}_product_to_denominations" ),`.
+- **`controller/catalog/product.php`, SKU load block** (form builder, after the `DPanda (dev `90522e1f1` + `63d1a367c`)` block):
+  ```php
+  		//{Label}
+  		if (isset($this->request->post['{key}_product_sku'])) {
+  			${key}_product_skus = $this->request->post['{key}_product_sku'];
+  		} elseif (isset($this->request->get['product_id'])) {
+  			${key}_product_skus = $this->model_catalog_product->get{Camel}ProductSkus($this->request->get['product_id']);
+  		} else {
+  			${key}_product_skus = array();
+  		}
+  		$this->data['{key}_product_skus'] = array();
+  		if (!empty(${key}_product_skus)) {
+  			foreach (${key}_product_skus as $product_sku) {
+  				$this->data['{key}_product_skus'][] = array('amount' => $product_sku['amount'],'sku' => $product_sku['sku']);
+  			}
+  		}
+  ```
+  Keep the `= array();` init: without it, new-product forms warn.
+- **`controller/catalog/product.php` `getRequestKeyMap()`.** Add `{CONST}_VENDOR_ID => "{key}_product_sku"`. The last entry has no trailing comma, so add one to the previous line.
+- **`model/catalog/product.php`.** Five spots, each next to the `DPanda (dev `90522e1f1` + `63d1a367c`)` counterpart:
+  1. Call `$this->update{Camel}ProductDenominations($product_id, $data['{key}_product_sku']);` at the end of **both** `addProduct()` and `editProduct()`.
+  2. Add the private updater:
+     ```php
+     	private function update{Camel}ProductDenominations($product_id = 0, $productSkus = array()){
+     		if(!empty($product_id)){
+     			$this->db->query("DELETE FROM " . DB_PREFIX . "{key}_product_to_denominations WHERE product_id = '" . (int)$product_id . "'");
+     		}
+     		if(!empty($productSkus)){
+     			foreach ($productSkus as $product_sku) {
+     				if(!empty($product_sku['sku']) && !empty($product_sku['amount'])){
+     					$this->db->query("INSERT INTO " . DB_PREFIX . "{key}_product_to_denominations SET product_id = '" . (int)$product_id . "', sku = '" . $this->db->escape($product_sku['sku']) . "', amount = '" . (float)$product_sku['amount'] . "'");
+     				}
+     			}
+     		}
+     	}
+     ```
+  3. In `deleteProduct()`, add `$this->db->query("DELETE FROM " . DB_PREFIX . "{key}_product_to_denominations WHERE product_id = '" . (int)$product_id . "'");`.
+  4. Add a public `get{Camel}ProductSkus($product_id)` that does `SELECT product_id,amount,sku FROM {key}_product_to_denominations WHERE product_id = …`.
+  5. In the `checkApiProductName()` duplicate-SKU block, add the same `GROUP_CONCAT(cd.product_id)` query on `{key}_product_to_denominations`, wrapped in `if(empty($return))`.
+- **`product_form.tpl` AND `product_form_for_evoucher.tpl`.** Identical edits in both files:
+  1. Tab link `<a href="#vouchertab-{key}">{Label}</a>`.
+  2. A `<div id="vouchertab-{key}" class="vtabs-content">` table iterating `${key}_product_skus`, with inputs `{key}_product_sku[n][sku]` and `{key}_product_sku[n][amount]` and an "Add {Label} Skus" button.
+  3. A JS `var {key}_sku_row = <?php echo ${key}_sku_row; ?>; function add{Camel}Skus() {…}` row adder.
+
+  Clone all three from the `DPanda (dev `90522e1f1` + `63d1a367c`)` versions with a rename.
+- **Invariant:** the POST key `{key}_product_sku` must be identical in both tpls, the controller, `getRequestKeyMap` and the model.
+
+**Verify**
+- PHP isn't installed locally, so lint every changed file in Docker:
+  ```bash
+  for v in 5.6 8.2; do docker run --rm -v "$PWD":/app -w /app php:$v-cli sh -c 'for f in <changed files>; do php -l "$f"; done'; done
+  ```
+  - `.tpl` files lint too.
+  - `config.php.sample` already fails `php -l` before your change, because some existing defines lack a `;`. Lint it before and after and compare.
+- Run consistency greps:
+  - `git grep -n "{CONST}_VENDOR_ID" -- karma`
+  - `git grep -n "sale/{key}_voucher" -- karma` (expect the header, automation tpl, controller and tpl)
+  - for fixedSku: `git grep -n "{key}_product_sku"` and `git grep -n "{key}_product_to_denominations"`
+- No leftover reference-vendor names in the new files: `grep -rin dpanda` on them must return nothing.
+- Run `git diff --check`. `git diff --stat` must show only the intended files.
+
+**Not done by you, but listed in the PR description and the handoff**
+- **The real `karma/config.php`**, in **every** environment, **before the code deploys**. It needs the define (and `FIXED_SKU_VENDORS` for fixedSku). The file is gitignored. On PHP 5/7 a missing define fails silently; on PHP 8 it is fatal on every admin page.
+- **The permission.** Go to System → Users → User Groups and tick `sale/{key}_voucher` for Access and Modify. The value is PHP-`serialize`d, so never edit it with string SQL.
+- **DB:**
+  - a `product_api_model_names` row;
+  - the vendor created in Catalog → Vendors, which writes `vendor` and `vendor_to_model`;
+  - `{sync_table}`, created with `CREATE TABLE … LIKE <reference table>` rather than invented DDL;
+  - for fixedSku, `{key}_product_to_denominations`, created the same way.
+
+**Smoke test (dev)**
+1. The menu entry shows, and the listing has rows, pagination, the All/Created/Non-created filter and bulk .xls download.
+2. **Create** works and redirects back to the listing, which proves the `getRoutes` entry.
+3. FixedSku:
+   - the vendor tab appears on the product form;
+   - a SKU saved with the right amount persists;
+   - a wrong amount gives "Denomination mismatch";
+   - a duplicate SKU is caught;
+   - deleting the product removes its denomination rows.
+4. Saving the product gives no "Product details not found" and no "Currency mismatch".
+5. `system/logs/error.txt` shows no `Use of undefined constant` and no `Invalid argument supplied for foreach()`.
+
 ### PHASE 4 — Test
 
 Run **MODE: TEST** below. Don't hand off until both steps pass or every failure is explained.
@@ -324,13 +466,13 @@ DB (central)
  6. CREATE TABLE {model}_products (sku, name, image, denominations, is_variable, min_price, max_price, description,
     terms_conditions, status, categories, how_to_use, country, currency, brand [+ vendor_id] [+ extraDetails keys]);
     fixedSku: {model}_product_to_denominations (product_id, sku, amount).
-karma (≈12 files, copy Dpanda / Printstop)
- 7. define('{CONST}_VENDOR_ID', <id>) in every env config.php (+ sample); FIXED_SKU_VENDORS (", <id>" separator) if fixedSku.
- 8. model/schema/vendor_tables.php: getVendorSchema() + getFixedSkusTable().
- 9. controller/catalog/product.php getRequestKeyMap + sku load/save; model/catalog/product.php update/delete/get sku helpers;
-    product_form.tpl + product_form_for_evoucher.tpl sku tab.
-10. Listing page sale/{vendor}_voucher (controller/model/language/tpl), header.tpl "Merchandise Vendors" menu,
-    product_automation.tpl getRoutes(), user-group permissions.
+karma
+ 7. Code written by me in Phase 3C (one PR per env branch). YOU: define('{CONST}_VENDOR_ID', <id>) (+ FIXED_SKU_VENDORS
+    ", <id>" for Variant B) in EVERY env's real config.php BEFORE deploy.
+ 8. Tick sale/{key}_voucher (Access + Modify) in System → Users → User Groups.
+ 9. CREATE TABLE {model}_products LIKE dpanda_products (+ _product_to_denominations for Variant B); product_api_model_names row;
+    create the vendor in Catalog → Vendors (writes vendor + vendor_to_model).
+10. Assign the merchandise filter group so auto-created products get "Delayed" delivery.
 11. Create products: product.model contains the model, api_product_name = sku, product_to_vendor_discount, status=1.
 Smoke test (staging)
 12. Place one order → POST a sample payload to plumAuth /webhook/orderUpdate/{name} → merchandise_vendor_order_details
@@ -464,7 +606,7 @@ FIX: <exact file + change>, or "escalate: base-class change required"
 ## NON-NEGOTIABLE RULES
 
 1. Never edit base classes (`vendorBaseClass.ts`, `vendorMerchandiseClass.ts`, `vendorBatchSyncClass.ts`, `vendorAuthentication.ts`), service files (`routes.ts`, `vendorController.ts`, `vendorProvider.ts`, `helper.ts`, `db.ts`, `productHelper.ts`, `vendorQueries.ts`), `integratedVendors/index.ts`, or existing vendor files/configs. Report shared bugs instead.
-2. This agent writes nothing in order-process-ms, plumAuth, karma or the DB — those are handoff checklist items.
+2. This agent writes nothing in order-process-ms, plumAuth or the DB, and never the real `karma/config.php`; those are handoff items. In karma it writes only the per-vendor files of Phase 3C; shared karma code is proposed, never changed, without approval. In karma_reports it writes only the balance module.
 3. Feasibility approval before code, even if the user says "just build it". Branch confirmation before code. One batch at a time.
 4. No partial implementations. Interface-required methods may be documented no-ops; everything else is complete or omitted.
 5. Credentials never in code, tracked files, commits or chat: staging values only in the local gitignored vendor config and the scratchpad Postman environment; placeholders in `*.sample`; read via `this.config.configs.credentials["field"]`.
