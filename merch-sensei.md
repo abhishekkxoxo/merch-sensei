@@ -151,6 +151,19 @@ Show what you pre-filled and ask the user to confirm.
 4. Prepaid balance endpoint (for karma_reports)?
 ```
 
+### PHASE 1.5 — Live API check on staging (before any feasibility verdict)
+
+```
+Before I call this feasible I'll run every vendor API on staging.
+Please share the staging credentials and test data (test products, a test shipping address, sandbox balance).
+```
+- Keep the credentials out of chat replies, code, tracked files, commits and logs. Put them only in a Postman environment file in the scratchpad (outside every repo) and, in Phase 3, in the local gitignored vendor config.
+- Build a Postman collection from the docs and run it: `postman collection run <collection.json> -e <env.json> [-d <data.json>]`. Cover **every endpoint the integration will call**: auth/token, catalog (all pages), place order, order status/detail, tracking, cancel if offered, plus error cases (bad credentials, invalid input, duplicate reference) and the **balance endpoint if one exists**. Staging only — never production.
+- Save the redacted responses as fixtures (TEST step 2 uses them).
+- Show a results table: endpoint · HTTP status · pass/fail · what the response revealed (field names, status values, quirks). Correct any Phase 1 answer the live responses contradict.
+
+**Verdict rule:** a feasibility line is ✅ only if its API passed live on staging. Not run or blocked → ⚠️ "not verified: <reason>". Failed → ❌. Say **"100% feasible"** only when every line is ✅ from the live run; otherwise list exactly what is unverified and why.
+
 ### PHASE 2 — Feasibility check
 
 ```
@@ -167,6 +180,8 @@ POLLING         ✅/⚠️/❌ status field = orders_status? (else override) sch
 PRE-CONFIRM FAIL ✅/⚠️  async vendor failing before confirm → base gap (escalate)
 CANCEL/RETURNS  ⚠️ outbound cancel unsupported; returns not refunded
 CATALOG         ✅/⚠️/❌ paging; reversible sku; brand column; fails loudly
+BALANCE         ✅/⚠️/❌ {karma_reports fetcher / none}
+LIVE STAGING RUN  {n}/{n} requests · {x}/{y} assertions passed · unverified: {list or none}
 COMPLEXITY  Low / Medium / High          RISKS  {list}
 
 PR FILES (vendor-integrations, tracked)
@@ -177,6 +192,7 @@ PR FILES (vendor-integrations, tracked)
 LOCAL / DEPLOYMENT CONFIG (gitignored — delivered via devx, never in a PR)
 • src/configs/vendorConfigs/{ClassName}.json
 • src/configs/baseConfigs.json mappings (per env)
+BALANCE (if endpoint exists): karma_reports vendors/{vendorName}Balance.js + vendorBalance.js + conf.json.sample
 CHECKLIST ONLY (other repos / DB) — see Handoff
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Shall I proceed? (yes / no / clarify X)
@@ -241,7 +257,7 @@ Before writing, re-read on the current branch: `vendorMerchandiseClass.ts`, `ven
       "maxApiAtaTime": 1,
       "maxCardsPerRequest": 1,
       "pickConfigCustomerInfo": false,
-      "credentials": { "FILL_FROM_SECURE_CONFIG": "FILL_FROM_SECURE_CONFIG" }
+      "credentials": { "{staging_key_name}": "{staging value from the user}" }
     }
   }
 }
@@ -253,12 +269,29 @@ Rules:
 - `fixedSku` requires `skuTable` (`vendorFactory.ts validateVendorConfigs`). `baseUrl`, `maxApiAtaTime`, `maxCardsPerRequest` are required and truthy. No `null` anywhere in `vendorData`. Use `vendorType`, not `type`.
 - Key names inside `accessTokenConfigs`/`productListingConfigs` must match what your class reads.
 - Include `refetchOrderReqConfigs` only for polling/refetch, `accessTokenConfigs` only for token vendors, `productListingConfigs` only for a catalog API.
-- Credentials: placeholder keys matching what the class reads; real values via devx.
+- Credentials: keys matching what the class reads.
+
+**Config values:** write the **staging** base URL and the **staging credentials** the user shared into `src/configs/vendorConfigs/{ClassName}.json` in the repo working tree. The folder is gitignored, so the file stays local and is never committed — tell the user to swap in production values per env (devx). Everywhere tracked (`*.sample`, code, tests, fixtures) use placeholders only. Confirm with `git status` that the config file is not staged.
 
 **File 4 — registration**
 - `vendorClassIdMapping`: `"{ClassName}": "{vendorId}"` (or an array) in `src/configs/baseConfigs.json` (local, per env) and mirrored in the tracked `baseConfigs.json.sample` (no secrets).
 - Polling vendors: add the id to `merchandiseOrderTrackingVendorIds`. Status emails for Plum Pro (store 4) clients need `allowMerchandiseEmailClientIds`. Custom auth headers go into `vendorCallLogger.mongo.redactHeaders`.
 - Then `npm run merge-configs` (regenerates `config.json` — **never hand-edit `config.json`**, it is overwritten by `npm run dev`/`prestart`).
+
+### PHASE 3B — Balance (only if the vendor has a balance endpoint)
+
+Write the karma_reports balance fetcher, exactly as `/akatsuki-giftcards` Phase 3B does. Branch karma_reports from `dev`; reference `vendors/soraRewardsBalance.js`.
+- `karma_reports/vendorBalance/vendors/{vendorName}Balance.js` exports `get{ClassName}Balance(vendorId)` and returns `{ balance: "CUR amount", vendorData: [{ currencyCode, vendorId, balanceAmount }] }`. It never throws: log, then return `{ balance: "N/A", vendorData: [] }`. Token vendors use `Helper.getAccessTokenFromDb(vendorId, tokenType)`.
+- Register it in `vendorBalance/vendorBalance.js` **positionally**:
+  1. add the `require`;
+  2. add `let {key} = 'N/A';`;
+  3. **append** `{ "fn": ..., "args": [<vendorId>] }` to the end of `vendorFunctions`;
+  4. add `{key} = results[<new last index>]?.balance;`;
+  5. add `{key}` to the returned object, minding the commas.
+
+  Then check that `vendorFunctions.length` equals the number of `results[` reads.
+- `conf.json.sample`: add a placeholder-only block. The real `conf.json` gets the staging values locally; it is never committed.
+- Report the exact `{key}`. The karma `order_list.tpl` `<td id>` and jQuery line must use the same key.
 
 ### PHASE 4 — Test
 
@@ -277,7 +310,8 @@ VERIFY:    npm run merge-configs && npx tsc && npm run lint && npx jest tests/ve
 
 NEXT STEPS
 Deployment config (devx, per env)
- 1. vendorConfigs/{ClassName}.json with real credentials + prod baseUrl; baseConfigs mappings.
+ 1. vendorConfigs/{ClassName}.json: replace the staging credentials + baseUrl with production; baseConfigs mappings.
+    {Balance: real karma_reports conf.json block; karma order_list.tpl row for key {key}.}
  2. OPMS src/configs/config_voucher_process.json: vendorIntegration.integratedVendors += "{vendorId}" (STRING),
     vendorIdsWithName["{vendorId}"] = "{ClassName}". OPMS hashKey/hashSalt must equal VI voucherProcure key/salt.
  3. plumAuth: api.integratedVendors.{vendorname-lowercase} = {vendorId}; add to api.integratedVendors.rawPayload
@@ -312,6 +346,8 @@ KNOWN LIMITS: no outbound cancel; returns are not refunded; failure before confi
 Always two steps, in order: prove the vendor behaves as documented, then prove our code handles what it actually returns.
 
 ### Step 1 — Vendor API contract tests (Postman CLI)
+
+In ONBOARD this collection already ran in Phase 1.5 — re-run it after the code is written and add any endpoint the code ended up calling.
 
 `postman collection run <collection.json> -e <env.json> [-d data.json]` — secrets only in the environment file, never committed. Cover:
 
@@ -431,7 +467,9 @@ FIX: <exact file + change>, or "escalate: base-class change required"
 2. This agent writes nothing in order-process-ms, plumAuth, karma or the DB — those are handoff checklist items.
 3. Feasibility approval before code, even if the user says "just build it". Branch confirmation before code. One batch at a time.
 4. No partial implementations. Interface-required methods may be documented no-ops; everything else is complete or omitted.
-5. Credentials never hardcoded: `"FILL_FROM_SECURE_CONFIG"` placeholders; read via `this.config.configs.credentials["field"]`.
+5. Credentials never in code, tracked files, commits or chat: staging values only in the local gitignored vendor config and the scratchpad Postman environment; placeholders in `*.sample`; read via `this.config.configs.credentials["field"]`.
+11. Never say "100% feasible" without a passing live staging run of every endpoint.
+12. If the vendor has a balance endpoint, write the karma_reports fetcher (Phase 3B).
 6. Never hand-edit `config.json`; registration goes in `baseConfigs.json` (+ `.sample`), then `npm run merge-configs`.
 7. Catalog sync fails loudly — never log-and-continue on a failed page.
 8. Status map uses only the six `deliveryStatus` targets. Never `ORDER_FAILED`.

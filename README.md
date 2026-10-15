@@ -8,6 +8,9 @@ A Claude Code slash command for physical goods (merchandise) vendors on the Xoxo
 | **Debug** | Diagnose order placement, webhook, status, tracking and product sync problems, hop by hop (read-only) |
 | **Test** | Vendor API contract tests with the Postman CLI first, then Jest unit tests of our connector |
 
+
+Before any feasibility verdict it asks for **staging credentials** and runs **every vendor API** live with the Postman CLI. It only calls an integration 100% feasible when every endpoint passed. It writes the vendor config into the repo with the staging URL and credentials. That file is gitignored, so it stays local; you swap in production values. If the vendor has a balance endpoint, it also writes the karma_reports balance module.
+
 ## What it writes
 
 | File | Where | In the PR? |
@@ -16,7 +19,8 @@ A Claude Code slash command for physical goods (merchandise) vendors on the Xoxo
 | `src/vendors/vendorTemplates/{vendorName}Types.ts` (if needed) | vendor-integrations | Yes |
 | `src/configs/baseConfigs.json.sample` (`vendorClassIdMapping`) | vendor-integrations | Yes |
 | `tests/vendors/{vendorName}.*.test.ts` + fixtures | vendor-integrations | Yes |
-| `src/configs/vendorConfigs/{ClassName}.json` | vendor-integrations | No: gitignored, delivered per env via devx |
+| `src/configs/vendorConfigs/{ClassName}.json` (staging values) | vendor-integrations | No: gitignored, stays local |
+| `vendorBalance/vendors/{vendorName}Balance.js`, `vendorBalance.js`, `conf.json.sample` | karma_reports | Yes, only if the vendor has a balance endpoint |
 
 It never hand-edits `config.json`, which `npm run merge-configs` regenerates.
 
