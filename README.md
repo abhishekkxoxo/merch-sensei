@@ -1,40 +1,54 @@
-# Claude Code Custom Commands
+# MerchSensei 🗡️ — Merchandise Vendor Integration Agent
 
-This directory contains custom slash commands for the Xoxoday project.
+A Claude Code slash command for physical goods (merchandise) vendors on the Xoxoday platform. It has three modes:
 
----
+| Mode | Use it to |
+|---|---|
+| **Onboard** | Integrate a new merchandise vendor: question batches → feasibility → branch check → code → tests → handoff |
+| **Debug** | Diagnose order placement, webhook, status, tracking and product sync problems, hop by hop (read-only) |
+| **Test** | Vendor API contract tests with the Postman CLI first, then Jest unit tests of our connector |
 
-## 🗡️ `/merch-sensei` — Merchandise Vendor Integration Agent
+## What it writes
 
-Guides you through onboarding a new physical goods (merchandise) vendor into the Xoxoday platform end-to-end.
+| File | Where | In the PR? |
+|---|---|---|
+| `src/vendors/integratedVendors/{ClassName}.ts` | vendor-integrations | Yes |
+| `src/vendors/vendorTemplates/{vendorName}Types.ts` (if needed) | vendor-integrations | Yes |
+| `src/configs/baseConfigs.json.sample` (`vendorClassIdMapping`) | vendor-integrations | Yes |
+| `tests/vendors/{vendorName}.*.test.ts` + fixtures | vendor-integrations | Yes |
+| `src/configs/vendorConfigs/{ClassName}.json` | vendor-integrations | No: gitignored, delivered per env via devx |
 
-### What it does
+It never hand-edits `config.json`, which `npm run merge-configs` regenerates.
 
-1. **Accepts API docs** (Postman collection, OpenAPI JSON, or raw text) and pre-fills answers, or walks you through Q&A if you have nothing to paste.
-2. **Asks 6 structured batches** of questions — vendor identity, auth, order placement, status tracking, product catalog, edge cases.
-3. **Runs a feasibility check** and waits for your approval before writing anything.
-4. **Confirms your Jira branch** before touching any file.
-5. **Writes all required files automatically:**
+## What still needs doing outside this command
 
-| File | Action |
-|------|--------|
-| `vendor-integrations/src/vendors/integratedVendors/{VendorName}.ts` | Created |
-| `vendor-integrations/src/vendors/vendorTemplates/{vendorName}Types.ts` | Created (if complex types needed) |
-| `vendor-integrations/src/configs/vendorConfigs/{vendorId}_{vendorName}.json` | Created |
-| `vendor-integrations/src/configs/config.json` | Updated (`vendorClassIdMapping` only) |
+The handoff gives an ordered checklist covering:
+- deployment config: VI vendor config and mappings, OPMS `vendorIntegration.integratedVendors` (string ids), and the plumAuth webhook routing (`api.integratedVendors`, `rawPayload`);
+- the token, sync and polling schedulers;
+- DB rows and tables;
+- about 12 karma admin files;
+- a staging smoke test.
 
-### What you still do manually after it finishes
+Platform limits it flags up front:
+- there is no outbound cancel;
+- returns are not refunded;
+- vendor-signed webhooks need escalation before building.
 
-1. Fill real credentials in `vendorConfigs/{vendorId}_{vendorName}.json` (replace `FILL_FROM_SECURE_CONFIG`)
-2. Add vendorId to `order-process-ms/config_voucher_process.json` → `integratedVendors` array
-3. Register webhook URL with the vendor (if applicable)
-4. Run `cd vendor-integrations && npm run merge-configs && npx tsc`
-5. Test order placement, webhook, and polling before going live
+## Installation
 
-### Usage
+```bash
+cp merch-sensei.md /path/to/your/project/.claude/commands/
+```
+
+Then in Claude Code:
 
 ```
 /merch-sensei
 ```
 
-Drop your vendor's API docs when prompted, or type `start` to begin Q&A.
+Drop your vendor's API docs, say `start`, or say `debug <vendor> <orderId|symptom>` or `test`.
+
+## Related
+
+- [akatsuki-gift-cards](https://github.com/abhishekkxoxo/akatsuki-gift-cards): gift card vendors
+- [topup-sensei](https://github.com/abhishekkxoxo/topup-sensei): mobile topup / recharge vendors
